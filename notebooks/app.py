@@ -2,21 +2,16 @@ import requests
 import json
 import praw
 import tweepy
-import os
 import time
 import streamlit as st
-from dotenv import load_dotenv
 from langdetect import detect
 
-# Load environment variables
-load_dotenv()
-
-# API Keys
-HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
-TWITTER_BEARER_TOKEN = os.getenv("TWITTER_BEARER_TOKEN")
-REDDIT_CLIENT_ID = os.getenv("REDDIT_CLIENT_ID")
-REDDIT_CLIENT_SECRET = os.getenv("REDDIT_CLIENT_SECRET")
-REDDIT_USER_AGENT = os.getenv("REDDIT_USER_AGENT")
+# Access secrets using st.secrets (This is the KEY change)
+HUGGINGFACE_API_KEY = st.secrets["HUGGINGFACE_API_KEY"]
+TWITTER_BEARER_TOKEN = st.secrets["TWITTER_BEARER_TOKEN"]
+REDDIT_CLIENT_ID = st.secrets["REDDIT_CLIENT_ID"]
+REDDIT_CLIENT_SECRET = st.secrets["REDDIT_CLIENT_SECRET"]
+REDDIT_USER_AGENT = st.secrets["REDDIT_USER_AGENT"]
 
 # Function to check if text is in English
 def is_english(text):
