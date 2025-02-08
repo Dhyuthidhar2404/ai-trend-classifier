@@ -5,8 +5,22 @@ import tweepy
 import time
 import streamlit as st
 from langdetect import detect
+from datetime import datetime, timezone
+from dateutil.relativedelta import relativedelta
 
-# Access secrets using st.secrets (This is the KEY change)
+def get_next_reset_date():
+    """Returns the next Twitter API reset date dynamically (5th of next month at 00:00 UTC)."""
+    now = datetime.now(timezone.utc)
+    
+    if now.day >= 5:
+        next_reset = now + relativedelta(months=1)
+    else:
+        next_reset = now
+
+    next_reset = next_reset.replace(day=5, hour=0, minute=0, second=0)
+    return next_reset.strftime("%Y-%m-%d %H:%M:%S UTC")
+
+# Access secrets using st.secrets
 HUGGINGFACE_API_KEY = st.secrets["HUGGINGFACE_API_KEY"]
 TWITTER_BEARER_TOKEN = st.secrets["TWITTER_BEARER_TOKEN"]
 REDDIT_CLIENT_ID = st.secrets["REDDIT_CLIENT_ID"]
@@ -24,12 +38,12 @@ def is_english(text):
 def classify_text(text):
     API_URL = "https://api-inference.huggingface.co/models/facebook/bart-large-mnli"
     headers = {"Authorization": f"Bearer {HUGGINGFACE_API_KEY}"}
-    
     data = {"inputs": text, "parameters": {"candidate_labels": ["AI-related", "Not AI-related"]}}
-    response = requests.post(API_URL, headers=headers, json=data)
     
+    response = requests.post(API_URL, headers=headers, json=data)
     if response.status_code == 200:
         return response.json()["labels"][0]
+    
     return "Unknown"
 
 # Set up Reddit API
@@ -39,7 +53,7 @@ reddit = praw.Reddit(
     user_agent=REDDIT_USER_AGENT
 )
 
-# Fetch trending Reddit posts with links
+# Fetch trending Reddit posts
 def fetch_reddit_posts():
     posts = []
     try:
@@ -53,101 +67,74 @@ def fetch_reddit_posts():
         st.error(f"⚠️ Error fetching Reddit posts: {e}")
         return []
 
-# Fetch trending AI tweets with links
+# Fetch AI-related tweets
 def fetch_twitter_tweets():
     tweets = []
+    reset_date = get_next_reset_date()
+
     try:
         client = tweepy.Client(bearer_token=TWITTER_BEARER_TOKEN)
         query = "AI OR artificial intelligence -is:retweet lang:en"
+
+        # Convert reset_date string to datetime
+        reset_datetime = datetime.strptime(reset_date, "%Y-%m-%d %H:%M:%S UTC").replace(tzinfo=timezone.utc)
+
+        if datetime.now(timezone.utc) < reset_datetime:
+            st.warning(f"🚫 Twitter API limit reached! Try again after **{reset_date}**.")
+            return []
+
         response = client.search_recent_tweets(query=query, max_results=10, tweet_fields=["text", "id"])
-        
+
         if response.data:
             for tweet in response.data:
                 if is_english(tweet.text):
                     classification = classify_text(tweet.text)
                     tweet_link = f"https://twitter.com/i/web/status/{tweet.id}"
                     tweets.append({"tweet": tweet.text, "classification": classification, "link": tweet_link})
-                time.sleep(1)  # Small delay to avoid hitting rate limits
+
         return tweets
+
     except tweepy.TooManyRequests:
-        return handle_rate_limit()
+        st.warning(f"🚫 Twitter API limit reached! Try again later.")
+        return []
     except Exception as e:
         st.error(f"⚠️ Error fetching tweets: {e}")
         return []
 
-# Handle Twitter API Rate Limits
-def handle_rate_limit():
-    st.warning("⚠️ Twitter rate limit hit! Retrying after 15 minutes...")
+# Function to display posts in Streamlit
+def display_posts(posts, platform):
+    if not posts:
+        st.warning(f"⚠️ No {platform} posts found.")
+        return
 
-    countdown_placeholder = st.empty()
-    progress_bar = st.progress(0)
+    st.subheader(f"📌 {platform} Trends")
 
-    for remaining in range(900, 0, -1):
-        minutes, seconds = divmod(remaining, 60)
-        countdown_placeholder.markdown(f"⏳ **Retrying in {minutes} min {seconds} sec...**")
-        progress_bar.progress((900 - remaining) / 900)  # Update progress bar
-        time.sleep(1)
+    for post in posts:
+        with st.expander(f"📢 {post['classification']} {platform} Post"):
+            st.write(f"**{post['title'] if 'title' in post else post['tweet']}**")
+            st.markdown(f"[🔗 View Post]({post['link']})", unsafe_allow_html=True)
 
-    countdown_placeholder.empty()
-    progress_bar.empty()
-
-    return fetch_twitter_tweets()  # Retry after countdown
-
-# Streamlit UI with Auto-Refresh
+# Streamlit UI
 def main():
     st.title("AI Trend Classifier 🧠🚀")
     st.write("Fetch and classify trending AI-related posts from Reddit & Twitter!")
 
-    # Toggle for Auto-Refresh
-    auto_refresh = st.checkbox("🔄 Auto-refresh every 5 minutes")
+    reset_date = get_next_reset_date()
 
-    def fetch_and_display():
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-
-        status_text.text("Fetching Reddit posts... 📡")
+    # Fetch Reddit
+    if st.button("Fetch Reddit Trends 🔥"):
         reddit_posts = fetch_reddit_posts()
-        progress_bar.progress(50)
+        display_posts(reddit_posts, "Reddit")
 
-        status_text.text("Fetching Twitter tweets... 🐦")
-        twitter_posts = fetch_twitter_tweets()
-        progress_bar.progress(100)
+    # Fetch Twitter (Check API limit before allowing request)
+    reset_datetime = datetime.strptime(reset_date, "%Y-%m-%d %H:%M:%S UTC").replace(tzinfo=timezone.utc)
 
-        progress_bar.empty()
-        status_text.text("✅ Data fetched successfully!")
-
-        # ✅ **Fix: Remove Twitter Rate Limit Warning if Data is Fetched**
-        if twitter_posts:
-            st.success("🐦 Twitter data fetched successfully!")
-
-        # Display Reddit results with links
-        st.subheader("🔥 Trending Reddit Posts (Machine Learning Subreddit)")
-        if reddit_posts:
-            for post in reddit_posts:
-                with st.expander(f"📌 {post['classification']} Post"):
-                    st.write(post["title"])
-                    st.markdown(f"[🔗 View Post]({post['link']})", unsafe_allow_html=True)
-        else:
-            st.write("🚫 No Reddit posts found.")
-
-        # Display Twitter results with links
-        st.subheader("🐦 Trending AI Tweets")
-        if twitter_posts:
-            for tweet in twitter_posts:
-                with st.expander(f"📢 {tweet['classification']} Tweet"):
-                    st.write(tweet["tweet"])
-                    st.markdown(f"[🔗 View Tweet]({tweet['link']})", unsafe_allow_html=True)
-        else:
-            st.warning("🚫 No Twitter posts found.")
-
-    if st.button("Fetch and Classify Reddit & Twitter Trends"):
-        fetch_and_display()
-
-    # Auto-refresh logic
-    if auto_refresh:
-        while True:
-            fetch_and_display()
-            time.sleep(300)  # Refresh every 5 minutes
+    if datetime.now(timezone.utc) < reset_datetime:
+        st.warning(f"🚫 Twitter API limit reached! Try again after **{reset_date}**.")
+    else:
+        if st.button("Fetch Twitter Trends 🐦"):
+            twitter_posts = fetch_twitter_tweets()
+            display_posts(twitter_posts, "Twitter")
 
 if __name__ == "__main__":
     main()
